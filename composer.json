@@ -1,0 +1,22 @@
+{
+  "name": "7csn/http",
+  "description": "流资源服务，用于构建基于 http 协议的服务器及客户端",
+  "type": "library",
+  "require": {
+    "php": "^8.0",
+    "7csn/tcp": "^1.0",
+    "7csn/http-message": "^1.0"
+  },
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "7csn",
+      "email": "1479672753@qq.com"
+    }
+  ],
+  "autoload": {
+    "psr-4": {
+      "chaser\\http\\": "src/"
+    }
+  }
+}
