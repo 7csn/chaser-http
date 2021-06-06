@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace chaser\http;
 
 /**
- * http 包装接口
+ * http 服务端解包接口
  *
  * @package chaser\http
  */
-interface HttpPackInterface
+interface ServerUnpackInterface
 {
     /**
      * 请求行默认长度上限 4K

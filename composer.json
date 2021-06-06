@@ -5,6 +5,7 @@
   "require": {
     "php": "^8.0",
     "7csn/tcp": "^1.0",
+    "7csn/stream-connect-only-unpack": "^1.0",
     "7csn/http-message": "^1.0"
   },
   "license": "MIT",

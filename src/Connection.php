@@ -7,11 +7,9 @@ namespace chaser\http;
 use chaser\http\message\ServerRequest;
 use chaser\http\message\Stream;
 use chaser\http\message\Uri;
-use chaser\reactor\Driver;
-use chaser\stream\ConnectedServer;
-use chaser\stream\exceptions\UnpackedException;
-use chaser\tcp\TcpConnection;
-use Psr\Http\Message\RequestInterface;
+use chaser\stream\exception\UnpackedException;
+use chaser\stream\traits\ConnectedCommunicationUnpack;
+use chaser\tcp\Connection as TcpConnection;
 use Psr\Http\Message\ServerRequestInterface;
 
 /**
@@ -22,25 +20,10 @@ use Psr\Http\Message\ServerRequestInterface;
  * @property int $maxRequestLineSize    请求行长度上限
  * @property int $maxHeaderSize         请求头长度上限
  * @property int $maxBodySize           请求主体长度上限
- * @property array $domainRoots         域静态目录对照表
  */
-class HttpConnection extends TcpConnection implements HttpPackInterface
+class Connection extends TcpConnection implements ServerUnpackInterface
 {
-    /**
-     * 常规配置
-     *
-     * @var array
-     */
-    protected array $configurations = [
-        'readBufferSize' => self::READ_BUFFER_SIZE,
-        'maxRecvBufferSize' => self::MAX_REQUEST_BUFFER_SIZE,
-        'maxSendBufferSize' => self::MAX_RESPONSE_BUFFER_SIZE,
-        'maxRequestLineSize' => self::MAX_REQUEST_LINE_SIZE,
-        'maxHeaderSize' => self::MAX_HEADER_SIZE,
-        'maxBodySize' => self::MAX_BODY_SIZE,
-        'heartbeatTimeout' => self::HEARTBEAT_TIMEOUT,
-        'domainRoots' => [],
-    ];
+    use ConnectedCommunicationUnpack;
 
     /**
      * 整包字节数
@@ -94,52 +77,13 @@ class HttpConnection extends TcpConnection implements HttpPackInterface
     /**
      * @inheritDoc
      */
-    public static function subscriber(): string
+    public static function configurations(): array
     {
-        return HttpConnectionSubscriber::class;
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public function __construct(ConnectedServer $server, Driver $reactor, $stream)
-    {
-        parent::__construct($server, $reactor, $stream);
-    }
-
-    /**
-     * 获取指定路径的静态文件
-     *
-     * @param string $path
-     * @param string|null $domain
-     * @return string|null
-     */
-    public function static(string $path, ?string $domain): ?string
-    {
-        if ($domain !== null) {
-            if (null !== $file = $this->staticFile($path, $domain)) {
-                return $file;
-            }
-        }
-        return $this->staticFile($path);
-    }
-
-    /**
-     * 获取静态文件
-     *
-     * @param string $path
-     * @param string $domain
-     * @return string|null
-     */
-    protected function staticFile(string $path, string $domain = '*'): ?string
-    {
-        if (isset($this->domainRoots[$domain])) {
-            $file = $this->domainRoots[$domain] . $path;
-            if (is_file($file)) {
-                return $file;
-            }
-        }
-        return null;
+        return [
+                'maxRequestLineSize' => self::MAX_REQUEST_LINE_SIZE,
+                'maxHeaderSize' => self::MAX_HEADER_SIZE,
+                'maxBodySize' => self::MAX_BODY_SIZE
+            ] + parent::configurations();
     }
 
     /**
@@ -159,10 +103,10 @@ class HttpConnection extends TcpConnection implements HttpPackInterface
     /**
      * 尝试解包
      *
-     * @return RequestInterface|null
+     * @return ServerRequestInterface|null
      * @throws UnpackedException
      */
-    protected function getMessage(): ?RequestInterface
+    protected function unpack(): ?ServerRequestInterface
     {
         if ($this->unpackBytes === null) {
             if (null === $size = $this->tryToGetPackageSize()) {
@@ -290,7 +234,7 @@ class HttpConnection extends TcpConnection implements HttpPackInterface
         }
 
         foreach (self::REQUEST_METHODS as $method) {
-            if (strpos($this->recvBuffer, $method) === 0) {
+            if (str_starts_with($this->recvBuffer, $method)) {
                 $this->requestMethod = $method;
                 break;
             }
