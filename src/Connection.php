@@ -10,7 +10,6 @@ use chaser\http\message\Uri;
 use chaser\stream\exception\UnpackedException;
 use chaser\stream\traits\ConnectedCommunicationUnpack;
 use chaser\tcp\Connection as TcpConnection;
-use Psr\Http\Message\ServerRequestInterface;
 
 /**
  * http 连接类
@@ -24,13 +23,6 @@ use Psr\Http\Message\ServerRequestInterface;
 class Connection extends TcpConnection implements ServerUnpackInterface
 {
     use ConnectedCommunicationUnpack;
-
-    /**
-     * 整包字节数
-     *
-     * @var int|null
-     */
-    protected ?int $unpackBytes = null;
 
     /**
      * 当前请求方法
@@ -84,6 +76,14 @@ class Connection extends TcpConnection implements ServerUnpackInterface
                 'maxHeaderSize' => self::MAX_HEADER_SIZE,
                 'maxBodySize' => self::MAX_BODY_SIZE
             ] + parent::configurations();
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public static function subscriber(): string
+    {
+        return ConnectionSubscriber::class;
     }
 
     /**
@@ -160,9 +160,9 @@ class Connection extends TcpConnection implements ServerUnpackInterface
     /**
      * 获取请求
      *
-     * @return ServerRequestInterface
+     * @return ServerRequest
      */
-    protected function getRequest(): ServerRequestInterface
+    protected function getRequest(): ServerRequest
     {
         $uri = new Uri($this->requestUri);
 
