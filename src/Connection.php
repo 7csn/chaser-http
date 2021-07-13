@@ -101,31 +101,6 @@ class Connection extends TcpConnection implements ServerUnpackInterface
     }
 
     /**
-     * 尝试解包
-     *
-     * @return ServerRequestInterface|null
-     * @throws UnpackedException
-     */
-    protected function unpack(): ?ServerRequestInterface
-    {
-        if ($this->unpackBytes === null) {
-            if (null === $size = $this->tryToGetPackageSize()) {
-                return null;
-            }
-            $this->unpackBytes = $size;
-        }
-
-        if (strlen($this->recvBuffer) >= $this->unpackBytes) {
-            $request = $this->getServerRequest();
-            $this->recvBuffer = substr($this->recvBuffer, $this->unpackBytes);
-            $this->unpackReset();
-            return $request;
-        }
-
-        return null;
-    }
-
-    /**
      * 尝试解析包长度
      *
      * @return int|null
@@ -187,7 +162,7 @@ class Connection extends TcpConnection implements ServerUnpackInterface
      *
      * @return ServerRequestInterface
      */
-    protected function getServerRequest(): ServerRequestInterface
+    protected function getRequest(): ServerRequestInterface
     {
         $uri = new Uri($this->requestUri);
 
