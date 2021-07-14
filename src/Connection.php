@@ -66,6 +66,8 @@ class Connection extends TcpConnection implements ServerUnpackInterface
      */
     protected ?int $bodySize = null;
 
+    protected static array $unpackBytesCache = [];
+
     /**
      * @inheritDoc
      */
@@ -87,20 +89,6 @@ class Connection extends TcpConnection implements ServerUnpackInterface
     }
 
     /**
-     * 验证请求方法所需长度
-     *
-     * @return int
-     */
-    protected static function requestMethodCheckingSize(): int
-    {
-        static $checking = null;
-
-        return $checking ??= array_reduce(self::REQUEST_METHODS, function ($checking, $method) {
-                return max($checking, strlen($method));
-            }, 0) + 2;
-    }
-
-    /**
      * 尝试解析包长度
      *
      * @return int|null
@@ -108,27 +96,67 @@ class Connection extends TcpConnection implements ServerUnpackInterface
      */
     protected function tryToGetPackageSize(): ?int
     {
-        if ($this->requestMethod === null) {
-            $check = $this->checkRequestMethod();
-            if ($check !== true) {
-                return $check;
-            }
+        $cacheable = !isset($this->recvBuffer[512]);
+
+        if ($cacheable && isset($sizes[$this->recvBuffer])) {
+            return self::$unpackBytesCache[$this->recvBuffer]['unpackBytes'];
         }
 
         if ($this->requestLineSize === null) {
-            $check = $this->checkRequestLine();
-            if ($check !== true) {
-                return $check;
+
+            $requestLine = strstr($this->recvBuffer, "\r\n", true);
+
+            if ($requestLine === false) {
+                // 请求行长度验证
+                if (strlen($this->recvBuffer) > $this->maxRequestLineSize) {
+                    $this->exception(414);
+                }
+                return null;
             }
+
+            // 请求行长度验证
+            if (strlen($requestLine) > $this->maxRequestLineSize) {
+                $this->exception(414);
+            }
+
+            // 首行格式错误
+            $explode = explode(' ', $requestLine);
+            if (count($explode) !== 3) {
+                $this->exception(400);
+            }
+
+            [$method, $uri, $protocol] = $explode;
+
+            // 验证方法
+            if (!in_array($method, self::REQUEST_METHODS)) {
+                $this->exception(405);
+            }
+            $this->requestMethod = $method;
+
+            // 验证 uri
+            if (parse_url($uri) === false) {
+                $this->exception(400);
+            }
+            $this->requestUri = $uri;
+
+            // 验证协议
+            if (!preg_match('/^HTTP\/([\d.]+)$/', $protocol, $match)) {
+                $this->exception(505);
+            }
+            if (!in_array($match[1], self::PROTOCOL_VERSIONS)) {
+                $this->exception(505);
+            }
+
+            $this->protocolVersion = $match[1];
+            $this->requestLineSize = strlen($requestLine);
         }
 
         // 请求头部
         $header = strstr($this->recvBuffer, "\r\n\r\n", true);
 
         if ($header === false) {
-            $limit = $this->maxRequestLineSize + 2 + $this->maxHeaderSize + 4;
-            if (strlen($this->recvBuffer) >= $limit) {
-                $this->exception(414);
+            if (strlen($this->recvBuffer) - $this->maxRequestLineSize - 2 >= $this->maxHeaderSize) {
+                $this->exception(431);
             }
             return null;
         }
@@ -137,10 +165,10 @@ class Connection extends TcpConnection implements ServerUnpackInterface
 
         // 请求头长度超过限制
         if ($this->headerSize > $this->maxHeaderSize) {
-            $this->exception(414);
+            $this->exception(431);
         }
 
-        if (in_array($this->requestMethod, ['GET', 'OPTIONS', 'HEAD']) === true) {
+        if (in_array($this->requestMethod, ['GET', 'OPTIONS', 'HEAD'])) {
             $this->bodySize = 0;
         } elseif (preg_match("/\r\nContent-Length: ?(\d+)/i", $header, $match) > 0) {
             $this->bodySize = (int)$match[1];
@@ -154,7 +182,24 @@ class Connection extends TcpConnection implements ServerUnpackInterface
             $this->exception(413);
         }
 
-        return $this->requestLineSize + 2 + $this->headerSize + 4 + $this->bodySize;
+        $unpackBytes = $this->requestLineSize + 2 + $this->headerSize + 4 + $this->bodySize;
+
+        if ($cacheable) {
+            self::$unpackBytesCache[$this->recvBuffer] = [
+                'unpackBytes' => $unpackBytes,
+                'requestSize' => $this->requestLineSize,
+                'requestUri' => $this->requestUri,
+                'requestMethod' => $this->requestMethod,
+                'protocolVersion' => $this->protocolVersion,
+                'headerSize' => $this->headerSize,
+                'bodySize' => $this->bodySize
+            ];
+            if (count(self::$unpackBytesCache) > 512) {
+                unset(self::$unpackBytesCache[key(self::$unpackBytesCache)]);
+            }
+        }
+
+        return $unpackBytes;
     }
 
     /**
@@ -163,6 +208,39 @@ class Connection extends TcpConnection implements ServerUnpackInterface
      * @return ServerRequest
      */
     protected function getRequest(): ServerRequest
+    {
+        static $requests = [];
+
+        $cacheable = $this->unpackBytes < 512 && isset(self::$unpackBytesCache[$this->recvBuffer]);
+
+        if ($cacheable) {
+            $package = substr($this->recvBuffer, 0, $this->unpackBytes);
+            if (count($requests) >= 512) {
+                unset($requests[key($requests)]);
+            }
+
+            return $requests[$package] ??= (function () {
+                [
+                    'requestSize' => $this->requestLineSize,
+                    'requestUri' => $this->requestUri,
+                    'requestMethod' => $this->requestMethod,
+                    'protocolVersion' => $this->protocolVersion,
+                    'headerSize' => $this->headerSize,
+                    'bodySize' => $this->bodySize
+                ] = self::$unpackBytesCache[$this->recvBuffer];
+                return $this->getRequest2();
+            })();
+        }
+
+        return $this->getRequest2();
+    }
+
+    /**
+     * 获取请求
+     *
+     * @return ServerRequest
+     */
+    protected function getRequest2(): ServerRequest
     {
         $uri = new Uri($this->requestUri);
 
@@ -193,93 +271,6 @@ class Connection extends TcpConnection implements ServerUnpackInterface
         $this->protocolVersion = null;
         $this->headerSize = null;
         $this->bodySize = null;
-    }
-
-    /**
-     * 验证请求方法
-     *
-     * @return bool|null
-     * @throws UnpackedException
-     */
-    protected function checkRequestMethod(): ?bool
-    {
-        // 长度不够跳过验证
-        if (strlen($this->recvBuffer) < self::requestMethodCheckingSize()) {
-            return null;
-        }
-
-        foreach (self::REQUEST_METHODS as $method) {
-            if (str_starts_with($this->recvBuffer, $method)) {
-                $this->requestMethod = $method;
-                break;
-            }
-        }
-
-        // 方法名不合法
-        if ($this->requestMethod === null) {
-            $this->exception(405);
-        }
-
-        // 格式错误：~^METHOD /~
-        if (substr($this->recvBuffer, strlen($this->requestMethod), 2) !== ' /') {
-            $this->exception(400);
-        }
-
-        return true;
-    }
-
-    /**
-     * 验证请求行
-     *
-     * @return bool|null
-     * @throws UnpackedException
-     */
-    protected function checkRequestLine(): ?bool
-    {
-        // 请求行数据
-        $requestLine = strstr($this->recvBuffer, "\r\n", true);
-
-        // 解析出请求行，则进行验证
-        if ($requestLine === false) {
-            // 长度未超限，则跳过验证；长度超限，抛出异常
-            if (strlen($this->recvBuffer) < $this->maxRequestLineSize + 2) {
-                return null;
-            }
-            $this->exception(414);
-        }
-
-        // 首行长度超过限制
-        if (strlen($requestLine) > $this->maxRequestLineSize) {
-            $this->exception(404);
-        }
-
-        // 首行格式错误
-        $explode = explode(' ', $requestLine);
-        if (count($explode) !== 3) {
-            $this->exception(400);
-        }
-
-        [, $uri, $protocol] = $explode;
-
-        // 验证 uri
-        if (parse_url($uri) === false) {
-            $this->exception(400);
-        }
-        $this->requestUri = $uri;
-
-        // 验证协议
-        if (!preg_match('/^HTTP\/([\d.]+)$/', $protocol, $match)) {
-            $this->exception(400);
-        }
-
-        if (in_array($match[1], self::PROTOCOL_VERSIONS) === false) {
-            $this->exception(500);
-        }
-
-        $this->protocolVersion = $match[1];
-        $this->requestLineSize = strlen($requestLine);
-
-        return true;
     }
 
     /**

@@ -36,5 +36,5 @@ interface ServerUnpackInterface
      *
      * @var string[]
      */
-    public const PROTOCOL_VERSIONS = ['1.1'];
+    public const PROTOCOL_VERSIONS = ['1.0', '1.1'];
 }
